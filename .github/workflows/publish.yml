@@ -5,6 +5,10 @@
 # provenance attestation. Set it up once on npmjs.com → the package → Settings → Trusted
 # publishing → GitHub Actions: this repository, workflow file "publish.yml".
 #
+# The very first release cannot use trusted publishing (npm only offers it for packages that
+# exist). For that one, add an NPM_TOKEN repository secret (a granular token that may publish);
+# when it is set it is used instead. Delete it once trusted publishing is configured.
+#
 # To release: bump "version" in package.json, merge into publish and push it.
 # The workflow tags the release as v<version>.
 name: Publish
@@ -58,6 +62,11 @@ jobs:
       - name: Use npm 11 (trusted publishing needs 11.5.1 or later)
         run: npm install -g npm@11 && npm --version
       - run: npm ci
+      - name: Use NPM_TOKEN if set (first release only)
+        if: env.NPM_TOKEN != ''
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
       - run: npm publish --access public
       - name: Tag the release
         run: |
