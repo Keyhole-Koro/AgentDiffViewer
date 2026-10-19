@@ -20,7 +20,7 @@ function git(...args: string[]): string {
   });
 }
 
-function blame(...args: string[]): string {
+function run(...args: string[]): string {
   return execFileSync(process.execPath, [CLI, ...args], { cwd: repo, encoding: "utf8", env: { ...process.env, HOME: home, NO_COLOR: "1", CLAUDE_CONFIG_DIR: "", CODEX_HOME: "" } });
 }
 
@@ -48,7 +48,7 @@ function codexSession(id: string, changes: Record<string, object>): void {
 }
 
 function owners(): Record<string, (string | null)[]> {
-  const json = JSON.parse(blame("--json")) as { files: { path: string; hunks: { owner: string | null }[] }[] };
+  const json = JSON.parse(run("--json")) as { files: { path: string; hunks: { owner: string | null }[] }[] };
   return Object.fromEntries(json.files.map((f) => [f.path, f.hunks.map((h) => h.owner)]));
 }
 
@@ -78,7 +78,7 @@ describe("attribution", () => {
   it("uses the text of a shell command that mentions the file, but never as sure", () => {
     writeFileSync(join(repo, "shared.ts"), ["const a = 100;", "", "", "", "", "", "", "", "", "const z = 26;", ""].join("\n"));
     claudeSession("sheller", [claudeTool("Bash", { command: "sed -i 's/const a = 1;/const a = 100;/' shared.ts" })]);
-    const json = JSON.parse(blame("--json")) as { files: { hunks: { owner: string; confidence: string }[] }[] };
+    const json = JSON.parse(run("--json")) as { files: { hunks: { owner: string; confidence: string }[] }[] };
     assert.equal(json.files[0]!.hunks[0]!.owner, "claude:sheller");
     assert.notEqual(json.files[0]!.hunks[0]!.confidence, "sure");
   });
@@ -121,7 +121,7 @@ describe("add", () => {
     claudeSession("claude-one", [claudeTool("Edit", { file_path: join(repo, "shared.ts"), old_string: "const a = 1;", new_string: "const a = 1;\nconst fromClaude = true;" })]);
     codexSession("codex-one", { [join(repo, "shared.ts")]: { type: "update", unified_diff: "@@ -10 +10,2 @@\n const z = 26;\n+const fromCodex = true;\n" } });
 
-    blame("add", "claude-one");
+    run("add", "claude-one");
     const staged = git("diff", "--cached");
     assert.match(staged, /\+const fromClaude = true;/);
     assert.doesNotMatch(staged, /fromCodex/);
@@ -131,11 +131,71 @@ describe("add", () => {
   it("stages whole files the session alone changed, including new ones", () => {
     writeFileSync(join(repo, "new.md"), "# Notes\nwritten by claude\n");
     claudeSession("writer", [claudeTool("Write", { file_path: join(repo, "new.md"), content: "# Notes\nwritten by claude\n" })]);
-    blame("add", "writer");
+    run("add", "writer");
     assert.equal(git("diff", "--cached", "--name-only").trim(), "new.md");
   });
 
   it("refuses an ambiguous or unknown session", () => {
-    assert.throws(() => blame("add", "nobody"), /No session/);
+    assert.throws(() => run("add", "nobody"), /No session/);
+  });
+});
+
+const HOOK = join(import.meta.dirname, "..", "src", "hook-entry.ts");
+
+function hook(agent: string, input: object): void {
+  execFileSync(process.execPath, [HOOK, "--agent", agent], { cwd: repo, input: JSON.stringify({ cwd: repo, ...input }) });
+}
+
+/** Runs `change` between a PreToolUse and a PostToolUse hook call, as an agent would. */
+function hooked(session: string, tool: string, toolInput: object, change: () => void, agent = "claude"): void {
+  const call = { session_id: session, tool_name: tool, tool_use_id: `${session}-${Math.random()}`, tool_input: toolInput };
+  hook(agent, { ...call, hook_event_name: "PreToolUse" });
+  change();
+  hook(agent, { ...call, hook_event_name: "PostToolUse" });
+}
+
+describe("hook records", () => {
+  it("attribute shell edits exactly, without any transcript", () => {
+    hooked("shell-session", "Bash", { command: "./codegen" }, () =>
+      writeFileSync(join(repo, "shared.ts"), ["const a = 1;", "", "", "", "", "", "", "", "", "const z = 27;", ""].join("\n")),
+    );
+    const json = JSON.parse(run("--json")) as { files: { hunks: { owner: string; confidence: string }[] }[] };
+    assert.equal(json.files[0]!.hunks[0]!.owner, "claude:shell-session");
+    assert.equal(json.files[0]!.hunks[0]!.confidence, "recorded");
+  });
+
+  it("separate two sessions' edits to the same file", () => {
+    const lines = ["const a = 1;", "", "", "", "", "", "", "", "", "const z = 26;", ""];
+    hooked("first", "Edit", { file_path: join(repo, "shared.ts") }, () => {
+      lines[0] = "const a = 2;";
+      writeFileSync(join(repo, "shared.ts"), lines.join("\n"));
+    });
+    hooked("second", "apply_patch", {}, () => {
+      lines[9] = "const z = 2;";
+      writeFileSync(join(repo, "shared.ts"), lines.join("\n"));
+    }, "codex");
+    assert.deepEqual(owners()["shared.ts"], ["claude:first", "codex:second"]);
+  });
+});
+
+describe("ranges", () => {
+  it("--base includes changes committed since that commit", () => {
+    const base = git("rev-parse", "HEAD").trim();
+    writeFileSync(join(repo, "later.md"), "committed later\n");
+    claudeSession("committer", [claudeTool("Write", { file_path: join(repo, "later.md"), content: "committed later\n" })]);
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "later"], { cwd: repo });
+    assert.deepEqual(owners(), {});
+    const json = JSON.parse(run("--json", "--base", base)) as { files: { path: string; hunks: { owner: string }[] }[] };
+    assert.deepEqual(json.files.map((f) => [f.path, f.hunks[0]!.owner]), [["later.md", "claude:committer"]]);
+  });
+
+  it("--since leaves out sessions older than the time", () => {
+    writeFileSync(join(repo, "new.md"), "x\n");
+    claudeSession("writer", [claudeTool("Write", { file_path: join(repo, "new.md"), content: "x\n" })]);
+    const recent = JSON.parse(run("--json", "--since", "1h")) as { files: { hunks: { owner: string }[] }[] };
+    assert.equal(recent.files[0]!.hunks[0]!.owner, "claude:writer");
+    const future = JSON.parse(run("--json", "--since", new Date(Date.now() + 36e5).toISOString())) as { files: { hunks: { owner: string | null }[] }[] };
+    assert.equal(future.files[0]!.hunks[0]!.owner, null);
   });
 });

@@ -18,6 +18,8 @@ export interface FileEvent {
   path: string; // absolute
   at: number; // ms
   kind: "edit" | "write" | "patch" | "delete";
+  /** "hook": recorded by agent-diff's hook (exact); otherwise read from a transcript. */
+  source?: "hook";
   /** Text the session wrote into the file (new_string, file content, + lines of a patch). */
   added: string;
   /** Text it replaced (old_string, - lines of a patch). */

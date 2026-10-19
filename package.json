@@ -5,7 +5,8 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "agent-diff": "src/cli.ts"
+    "agent-diff": "src/cli.ts",
+    "agent-diff-hook": "src/hook-entry.ts"
   },
   "engines": {
     "node": ">=22.18"

@@ -2,7 +2,40 @@ import type { ChangedFile, Hunk } from "./git.ts";
 import { filesMentioned, shellMayWrite } from "./shell.ts";
 import type { FileEvent, Transcripts } from "./types.ts";
 
-export type Confidence = "sure" | "likely" | "maybe";
+/** recorded: agent-diff's hook saw the session write it. sure/likely/maybe: from transcripts. */
+export type Confidence = "recorded" | "sure" | "likely" | "maybe";
+
+interface Writer {
+  added: Set<string>;
+  removed: Set<string>;
+  lastAt: number;
+  deleted: boolean;
+  created: boolean;
+}
+
+function writersOf(events: FileEvent[]): Map<string, Writer> {
+  const writers = new Map<string, Writer>();
+  for (const e of events) {
+    const w = writers.get(e.sessionKey) ?? { added: new Set(), removed: new Set(), lastAt: 0, deleted: false, created: false };
+    for (const l of lineSet(e.added)) w.added.add(l);
+    for (const l of lineSet(e.removed)) w.removed.add(l);
+    w.lastAt = Math.max(w.lastAt, e.at);
+    if (e.kind === "delete") w.deleted = true;
+    if (e.kind === "write") w.created = true;
+    writers.set(e.sessionKey, w);
+  }
+  return writers;
+}
+
+/** The writer whose writes contain the largest share of the hunk's lines; ties go to the latest. */
+function bestWriter(writers: Map<string, Writer>, added: string[], removed: string[]): { key: string; s: number; at: number } | undefined {
+  let best: { key: string; s: number; at: number } | undefined;
+  for (const [key, w] of writers) {
+    const s = added.length ? score(added, w.added) : score(removed, w.removed);
+    if (s > 0 && (!best || s > best.s || (s === best.s && w.lastAt > best.at))) best = { key, s, at: w.lastAt };
+  }
+  return best;
+}
 
 export interface HunkOwner {
   hunk: Hunk;
@@ -100,17 +133,10 @@ export function attribute(files: ChangedFile[], transcripts: Transcripts): FileA
   const results = files.map((file): FileAttribution => {
     const since = file.committedAt;
     const events = (byPath.get(file.abs) ?? []).filter((e) => e.at > since);
-    // Per session: what it wrote and removed in this file, and when it last did.
-    const writers = new Map<string, { added: Set<string>; removed: Set<string>; lastAt: number; deleted: boolean; created: boolean }>();
-    for (const e of events) {
-      const w = writers.get(e.sessionKey) ?? { added: new Set(), removed: new Set(), lastAt: 0, deleted: false, created: false };
-      for (const l of lineSet(e.added)) w.added.add(l);
-      for (const l of lineSet(e.removed)) w.removed.add(l);
-      w.lastAt = Math.max(w.lastAt, e.at);
-      if (e.kind === "delete") w.deleted = true;
-      if (e.kind === "write") w.created = true;
-      writers.set(e.sessionKey, w);
-    }
+    // Per session: what it wrote and removed in this file, and when it last did. Hook records are
+    // kept apart: they are exact, so they are asked first.
+    const recorded = writersOf(events.filter((e) => e.source === "hook"));
+    const writers = writersOf(events.filter((e) => e.source !== "hook"));
     const isDeleted = file.status.startsWith("D");
     const isNew = file.status === "??" || file.status.startsWith("A");
     // Sessions the transcripts show deleting (or creating) this very file: for deleted or new
@@ -128,17 +154,19 @@ export function attribute(files: ChangedFile[], transcripts: Transcripts): FileA
       w.lastAt = Math.max(w.lastAt, c.at);
       shellWriters.set(c.sessionKey, w);
     }
-    const shell = [...shellWriters.keys()].filter((k) => !writers.has(k));
+    const shell = [...shellWriters.keys()].filter((k) => !writers.has(k) && !recorded.has(k));
+    const recordedDeleter = isDeleted ? [...recorded].filter(([, w]) => w.deleted).map(([k]) => k) : [];
+    const recordedCreator = isNew ? [...recorded].filter(([, w]) => w.created).map(([k]) => k) : [];
 
     const hunks: HunkOwner[] = file.hunks.map((hunk) => {
       const added = meaningful(hunk.added);
       const removed = meaningful(hunk.removed);
-      let best: { key: string; s: number; at: number } | undefined;
-      for (const [key, w] of writers) {
-        const s = added.length ? score(added, w.added) : score(removed, w.removed);
-        if (s > 0 && (!best || s > best.s || (s === best.s && w.lastAt > best.at))) best = { key, s, at: w.lastAt };
-      }
-      const all = [...writers.keys(), ...shell];
+      const all = [...new Set([...recorded.keys(), ...writers.keys(), ...shell])];
+      const exact = bestWriter(recorded, added, removed);
+      if (exact) return { hunk, owner: exact.key, confidence: "recorded", matched: exact.s, others: all.filter((k) => k !== exact.key) };
+      const recordedEvidence = recordedDeleter.length === 1 ? recordedDeleter[0] : recordedCreator.length === 1 ? recordedCreator[0] : undefined;
+      if (recordedEvidence) return { hunk, owner: recordedEvidence, confidence: "recorded", matched: 0, others: all.filter((k) => k !== recordedEvidence) };
+      let best = bestWriter(writers, added, removed);
       // A tool call that deleted or created this very file outranks any shell text.
       const evidence = isDeleted && deleters.length === 1 ? deleters[0] : isNew && creators.length === 1 ? creators[0] : undefined;
       if (!best && evidence) return { hunk, owner: evidence, confidence: "sure", matched: 0, others: all.filter((k) => k !== evidence) };

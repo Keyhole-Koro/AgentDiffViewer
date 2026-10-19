@@ -3,7 +3,10 @@ import { parseArgs } from "node:util";
 import { attribute, type FileAttribution, type HunkOwner } from "./attribute.ts";
 import { readClaude } from "./claude.ts";
 import { readCodex } from "./codex.ts";
-import { changedFiles, gitAdd, gitApplyCached, repoRoot, unstagedDiff } from "./git.ts";
+import { changedFiles, commitAt, EMPTY_TREE, gitAdd, gitApplyCached, repoRoot, unstagedDiff, type Range } from "./git.ts";
+import { runHook } from "./hook.ts";
+import { agentInstalled, installHooks, uninstallHooks } from "./install.ts";
+import { recordedChanges, recordedEvents, type RecordedChange } from "./recorded.ts";
 import type { Session, Transcripts } from "./types.ts";
 
 const HELP = `agent-diff — which Claude Code or Codex session made each uncommitted change
@@ -12,9 +15,13 @@ const HELP = `agent-diff — which Claude Code or Codex session made each uncomm
   agent-diff --by-file       The same, one line per file
   agent-diff show <session>  The hunks a session made, as a diff
   agent-diff add <session>   Stage exactly that session's changes (whole files and single hunks)
+  agent-diff install         Record every write as it happens (hooks for Claude Code and Codex)
+  agent-diff uninstall       Remove those hooks
 
 Options
   -C <dir>         Run in another repository
+  --since <time>   Changes since then: 2h, 1d, today or a date (commits since then included)
+  --base <ref>     Changes since a commit or branch, e.g. --base main
   --days <n>       How far back to read transcripts (default 30; files committed earlier are
                    only matched against sessions after their last commit anyway)
   --dry-run        With add: show what would be staged
@@ -45,15 +52,51 @@ function label(s: Session | undefined, key: string): string {
   return `${bold(agent)} ${cyan(s.id.slice(0, 8))}  ${dim(`${when(s.firstAt)}–${when(s.lastAt)}`)}  ${title}`;
 }
 
-function load(root: string, days: number): { transcripts: Transcripts; attributions: FileAttribution[] } {
-  const files = changedFiles(root);
+export interface Loaded {
+  root: string;
+  range: Range & { label: string };
+  transcripts: Transcripts;
+  attributions: FileAttribution[];
+  recorded: RecordedChange[];
+}
+
+/** "2h", "30m", "3d", "today", or anything Date understands, as ms since the epoch. */
+export function parseSince(text: string, now = Date.now()): number {
+  const m = /^(\d+(?:\.\d+)?)\s*(m|min|h|d|w)$/.exec(text.trim());
+  if (m) return now - Number(m[1]) * { m: 6e4, min: 6e4, h: 36e5, d: 864e5, w: 6048e5 }[m[2] as "m"];
+  if (text === "today") return new Date(new Date(now).toDateString()).getTime();
+  const t = Date.parse(text);
+  if (Number.isNaN(t)) throw new Error(`--since: cannot read "${text}" (try 2h, 1d, today or 2026-10-19T09:00)`);
+  return t;
+}
+
+/**
+ * The changes to show and who made them. By default the uncommitted ones; with `base`, everything
+ * since that commit; with `since`, everything since the commit that was HEAD then, made by
+ * sessions active after it.
+ */
+export function load(root: string, opts: { days?: number; base?: string; since?: number } = {}): Loaded {
+  const range: Loaded["range"] = { label: "uncommitted" };
+  if (opts.since !== undefined) {
+    range.cutoff = opts.since;
+    range.base = commitAt(root, opts.since) ?? EMPTY_TREE;
+    range.label = `since ${new Date(opts.since).toLocaleString()}`;
+  }
+  if (opts.base) {
+    range.base = opts.base;
+    range.label = `since ${opts.base}`;
+  }
+  const files = changedFiles(root, range);
   const transcripts: Transcripts = { sessions: new Map(), events: [], shells: [] };
+  let recorded: RecordedChange[] = [];
   if (files.length) {
-    const since = Date.now() - days * 864e5;
+    const since = Math.min(Date.now() - (opts.days ?? 30) * 864e5, opts.since ?? Infinity);
     readClaude(transcripts, since);
     readCodex(transcripts, since);
+    recorded = recordedChanges(root, transcripts, since, new Set(files.map((f) => f.rel)));
+    transcripts.events.push(...recordedEvents(root, recorded));
   }
-  return { transcripts, attributions: attribute(files, transcripts) };
+  return { root, range, transcripts, attributions: attribute(files, transcripts), recorded };
 }
 
 function findSession(transcripts: Transcripts, query: string): string {
@@ -180,15 +223,33 @@ function add(root: string, transcripts: Transcripts, attributions: FileAttributi
   console.log(dim(`\nStaged. Check with: git diff --cached --stat`));
 }
 
+function installCommand(command: "install" | "uninstall", only: string | undefined): void {
+  const agents = (only ? [only] : ["claude", "codex"]).filter((a): a is "claude" | "codex" => a === "claude" || a === "codex");
+  if (only && agents.length === 0) throw new Error(`--agent is claude or codex, not "${only}"`);
+  for (const agent of agents) {
+    if (command === "install" && !only && !agentInstalled(agent)) continue;
+    const r = command === "install" ? installHooks(agent) : uninstallHooks(agent);
+    const name = agent === "claude" ? "Claude Code" : "Codex";
+    const what = !r.changed ? "nothing to change in" : command === "install" ? "hooks added to" : "hooks removed from";
+    console.log(`${r.changed ? "✓" : "-"} ${name}: ${what} ${r.file}`);
+    if (agent === "codex" && command === "install" && r.changed) {
+      console.log(dim("  In Codex, run /hooks once and trust the agent-diff hook; until then it records nothing."));
+    }
+  }
+}
+
 function main(): void {
   const { values: o, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       C: { type: "string", short: "C" },
       days: { type: "string" },
+      base: { type: "string" },
+      since: { type: "string" },
       "by-file": { type: "boolean" },
       "dry-run": { type: "boolean" },
       json: { type: "boolean" },
+      agent: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -196,10 +257,11 @@ function main(): void {
     console.log(HELP);
     return;
   }
+  const [command, arg] = positionals;
+  if (command === "install" || command === "uninstall") return void installCommand(command, o.agent);
   const root = repoRoot(o.C ?? process.cwd());
   const days = o.days ? Number(o.days) : 30;
-  const { transcripts, attributions } = load(root, days);
-  const [command, arg] = positionals;
+  const { transcripts, attributions } = load(root, { days, base: o.base, since: o.since ? parseSince(o.since) : undefined });
 
   if (o.json) {
     const sessions = Object.fromEntries([...transcripts.sessions].filter(([k]) => attributions.some((a) => a.hunks.some((h) => h.owner === k || h.others.includes(k)))));
@@ -241,9 +303,29 @@ function main(): void {
   }
 }
 
-try {
-  main();
-} catch (e) {
-  console.error((e as Error).message);
-  process.exitCode = 1;
+/**
+ * `agent-diff hook --agent <claude|codex>`, run by the agents around every tool call. It reads the
+ * call from stdin, records it, and stays silent and successful whatever happens.
+ */
+async function hook(): Promise<void> {
+  const i = process.argv.indexOf("--agent");
+  const agent = process.argv[i + 1] === "codex" ? "codex" : "claude";
+  let stdin = "";
+  for await (const chunk of process.stdin) stdin += chunk;
+  try {
+    runHook(agent, stdin);
+  } catch {
+    // never block or fail a tool call
+  }
+}
+
+if (process.argv[2] === "hook") {
+  await hook();
+} else {
+  try {
+    main();
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exitCode = 1;
+  }
 }
