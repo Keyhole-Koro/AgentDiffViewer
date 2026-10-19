@@ -1,0 +1,17 @@
+{
+  "name": "agent-blame",
+  "version": "0.1.0",
+  "description": "Which Claude Code or Codex session made each uncommitted change in a git working tree",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "agent-blame": "src/cli.ts" },
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2"
+  }
+}
