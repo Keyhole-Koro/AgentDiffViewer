@@ -51,6 +51,8 @@ jobs:
     permissions:
       contents: write # to push the v<version> tag
       id-token: write
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }} # empty unless set; step-level env is not visible to `if`
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -64,8 +66,6 @@ jobs:
       - run: npm ci
       - name: Use NPM_TOKEN if set (first release only)
         if: env.NPM_TOKEN != ''
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
       - run: npm publish --access public
       - name: Tag the release
