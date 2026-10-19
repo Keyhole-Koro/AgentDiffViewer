@@ -1,0 +1,65 @@
+# Publishes agent-diff-viewer to npm when the publish branch is pushed and package.json has a
+# version that is not on npm yet. Otherwise it does nothing.
+#
+# Uses npm trusted publishing (OIDC): no npm token is stored anywhere, and the package gets a
+# provenance attestation. Set it up once on npmjs.com → the package → Settings → Trusted
+# publishing → GitHub Actions: this repository, workflow file "publish.yml".
+#
+# To release: bump "version" in package.json, merge into publish and push it.
+# The workflow tags the release as v<version>.
+name: Publish
+
+on:
+  push:
+    branches: [publish]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      new: ${{ steps.version.outputs.new }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        name: Is this version on npm yet?
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if npm view "agent-diff-viewer@${version}" version >/dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "${version} is already on npm; nothing to publish."
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: check
+    if: needs.check.outputs.new == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [check, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to push the v<version> tag
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          # No registry-url: it writes an .npmrc with _authToken=${NODE_AUTH_TOKEN}, and npm then
+          # tries that (empty) token instead of trusted publishing.
+      - name: Use npm 11 (trusted publishing needs 11.5.1 or later)
+        run: npm install -g npm@11 && npm --version
+      - run: npm ci
+      - run: npm publish --access public
+      - name: Tag the release
+        run: |
+          git tag "v${{ needs.check.outputs.version }}"
+          git push origin "v${{ needs.check.outputs.version }}"

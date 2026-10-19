@@ -5,18 +5,22 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "agent-diff": "src/cli.ts",
-    "agent-diff-hook": "src/hook-entry.ts"
+    "agent-diff": "dist/cli.js",
+    "agent-diff-hook": "dist/hook-entry.js"
   },
   "engines": {
     "node": ">=22.18"
   },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp src/viewer.html dist/",
+    "prepack": "npm run build",
     "test": "node --test test/*.test.ts",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "screenshots": "node scripts/screenshots.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "playwright": "^1.63.0",
     "typescript": "7.0.2"
   },
   "repository": {
@@ -26,7 +30,8 @@
   "homepage": "https://github.com/Keyhole-Koro/AgentDiffViewer#readme",
   "author": "Keyhole-Koro",
   "files": [
-    "src",
+    "dist",
+    "skills",
     "README.md",
     "LICENSE"
   ]

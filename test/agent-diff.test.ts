@@ -218,3 +218,14 @@ describe("view", () => {
     }
   });
 });
+
+describe("--self", () => {
+  it("stages the changes of the session running the command", () => {
+    writeFileSync(join(repo, "mine.md"), "mine\n");
+    writeFileSync(join(repo, "theirs.md"), "theirs\n");
+    claudeSession("me", [claudeTool("Write", { file_path: join(repo, "mine.md"), content: "mine\n" })]);
+    codexSession("them", { [join(repo, "theirs.md")]: { type: "add", content: "theirs\n" } });
+    execFileSync(process.execPath, [CLI, "add", "--self"], { cwd: repo, env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: "", CODEX_HOME: "", CLAUDE_CODE_SESSION_ID: "me" } });
+    assert.equal(git("diff", "--cached", "--name-only").trim(), "mine.md");
+  });
+});

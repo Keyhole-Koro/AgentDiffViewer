@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +32,8 @@ function onPath(command: string): boolean {
 /** How the agent should start the recorder: the installed bin, else node + this checkout. */
 function hookCommand(agent: Agent): string {
   if (onPath(MARKER)) return `${MARKER} --agent ${agent}`;
-  const entry = join(dirname(fileURLToPath(import.meta.url)), "hook-entry.ts");
+  const here = fileURLToPath(import.meta.url);
+  const entry = join(dirname(here), `hook-entry${here.endsWith(".ts") ? ".ts" : ".js"}`);
   return `"${process.execPath}" "${entry}" --agent ${agent} # ${MARKER}`;
 }
 
@@ -100,4 +101,41 @@ export function uninstallHooks(agent: Agent): { file: string; changed: boolean }
 
 export function agentInstalled(agent: Agent): boolean {
   return onPath(agent === "claude" ? "claude" : "codex") || existsSync(dirname(settingsFile(agent)));
+}
+
+/** Marks a skill folder as ours, so only our own copies are replaced or removed. */
+const SKILL_MARKER = ".installed-by-agent-diff";
+const SKILLS = join(dirname(fileURLToPath(import.meta.url)), "..", "skills");
+
+/** Claude Code reads ~/.claude/skills; Codex (and Gemini CLI) read ~/.agents/skills. */
+export function skillDir(agent: Agent): string {
+  return agent === "claude" ? join(process.env["CLAUDE_CONFIG_DIR"] || join(homedir(), ".claude"), "skills") : join(homedir(), ".agents", "skills");
+}
+
+export function installSkills(agent: Agent): { dir: string; installed: string[]; skipped: string[] } {
+  const dir = skillDir(agent);
+  const result = { dir, installed: [] as string[], skipped: [] as string[] };
+  for (const skill of readdirSync(SKILLS)) {
+    const dest = join(dir, skill);
+    if (existsSync(dest) && !existsSync(join(dest, SKILL_MARKER))) {
+      result.skipped.push(skill); // someone else's skill with the same name
+      continue;
+    }
+    rmSync(dest, { recursive: true, force: true });
+    cpSync(join(SKILLS, skill), dest, { recursive: true });
+    writeFileSync(join(dest, SKILL_MARKER), "Installed by `agent-diff install`; removed by `agent-diff uninstall`.\n");
+    result.installed.push(skill);
+  }
+  return result;
+}
+
+export function uninstallSkills(agent: Agent): string[] {
+  const dir = skillDir(agent);
+  const removed: string[] = [];
+  for (const skill of readdirSync(SKILLS)) {
+    if (!existsSync(join(dir, skill, SKILL_MARKER))) continue;
+    rmSync(join(dir, skill), { recursive: true, force: true });
+    removed.push(skill);
+  }
+  return removed;
 }

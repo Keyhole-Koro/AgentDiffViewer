@@ -5,7 +5,7 @@ import { applyAdd, findSession, load, parseSince, planAdd, type Loaded } from ".
 import { repoRoot } from "./git.ts";
 import { serve } from "./server.ts";
 import { runHook } from "./hook.ts";
-import { agentInstalled, installHooks, uninstallHooks } from "./install.ts";
+import { agentInstalled, installHooks, installSkills, uninstallHooks, uninstallSkills } from "./install.ts";
 import type { Session, Transcripts } from "./types.ts";
 
 const HELP = `agent-diff — which Claude Code or Codex session made each uncommitted change
@@ -15,8 +15,9 @@ const HELP = `agent-diff — which Claude Code or Codex session made each uncomm
   agent-diff show <session>  The hunks a session made, as a diff
   agent-diff add <session>   Stage exactly that session's changes (whole files and single hunks)
   agent-diff view            Browse it all in a local web page (127.0.0.1; --port to pick one)
-  agent-diff install         Record every write as it happens (hooks for Claude Code and Codex)
-  agent-diff uninstall       Remove those hooks
+  agent-diff install         Record every write as it happens (hooks for Claude Code and Codex),
+                             and teach the agents to commit only their own changes (a skill)
+  agent-diff uninstall       Remove both
 
 Options
   -C <dir>         Run in another repository
@@ -26,6 +27,8 @@ Options
                    only matched against sessions after their last commit anyway)
   --dry-run        With add: show what would be staged
   --json           Machine-readable output
+
+  --self           With show/add: the Claude Code or Codex session running the command
 
 <session> is an id prefix (e.g. 0be1c91d), optionally prefixed with claude: or codex:.
 Reads ~/.claude/projects and ~/.codex/sessions (or $CLAUDE_CONFIG_DIR, $CODEX_HOME).`;
@@ -145,10 +148,27 @@ function installCommand(command: "install" | "uninstall", only: string | undefin
     const name = agent === "claude" ? "Claude Code" : "Codex";
     const what = !r.changed ? "nothing to change in" : command === "install" ? "hooks added to" : "hooks removed from";
     console.log(`${r.changed ? "✓" : "-"} ${name}: ${what} ${r.file}`);
+    if (command === "install") {
+      const sk = installSkills(agent);
+      if (sk.installed.length) console.log(`✓ ${name}: skill ${sk.installed.join(", ")} in ${sk.dir}`);
+      for (const skipped of sk.skipped) console.log(`- ${name}: ${skipped} in ${sk.dir} is someone else's; left as it is`);
+    } else {
+      const removed = uninstallSkills(agent);
+      if (removed.length) console.log(`✓ ${name}: skill ${removed.join(", ")} removed`);
+    }
     if (agent === "codex" && command === "install" && r.changed) {
       console.log(dim("  In Codex, run /hooks once and trust the agent-diff hook; until then it records nothing."));
     }
   }
+}
+
+/** The session running this command, when an agent runs it: both agents export their id. */
+function selfSession(): string {
+  const claude = process.env["CLAUDE_CODE_SESSION_ID"];
+  if (claude) return `claude:${claude}`;
+  const codex = process.env["CODEX_THREAD_ID"] || process.env["CODEX_SESSION_ID"];
+  if (codex) return `codex:${codex}`;
+  throw new Error("--self works inside a Claude Code or Codex session (no CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID here).");
 }
 
 function main(): void {
@@ -164,6 +184,7 @@ function main(): void {
       json: { type: "boolean" },
       agent: { type: "string" },
       port: { type: "string" },
+      self: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -171,7 +192,8 @@ function main(): void {
     console.log(HELP);
     return;
   }
-  const [command, arg] = positionals;
+  const [command, given] = positionals;
+  const arg = given ?? (o.self ? selfSession() : undefined);
   if (command === "install" || command === "uninstall") return void installCommand(command, o.agent);
   const root = repoRoot(o.C ?? process.cwd());
   const days = o.days ? Number(o.days) : 30;
@@ -213,11 +235,11 @@ function main(): void {
       else printBySession(transcripts, attributions);
       return;
     case "show":
-      if (!arg) throw new Error("Usage: agent-diff show <session>");
+      if (!arg) throw new Error("Usage: agent-diff show <session|--self>");
       show(transcripts, attributions, findSession(transcripts, arg));
       return;
     case "add":
-      if (!arg) throw new Error("Usage: agent-diff add <session>");
+      if (!arg) throw new Error("Usage: agent-diff add <session|--self>");
       add(loaded, findSession(transcripts, arg), !!o["dry-run"]);
       return;
     default:
