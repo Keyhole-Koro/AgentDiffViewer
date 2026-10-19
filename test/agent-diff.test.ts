@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,5 +197,24 @@ describe("ranges", () => {
     assert.equal(recent.files[0]!.hunks[0]!.owner, "claude:writer");
     const future = JSON.parse(run("--json", "--since", new Date(Date.now() + 36e5).toISOString())) as { files: { hunks: { owner: string | null }[] }[] };
     assert.equal(future.files[0]!.hunks[0]!.owner, null);
+  });
+});
+
+describe("view", () => {
+  it("serves the changes to the page, only with the token", async () => {
+    writeFileSync(join(repo, "new.md"), "x\n");
+    claudeSession("writer", [claudeTool("Write", { file_path: join(repo, "new.md"), content: "x\n" })]);
+    const child = spawn(process.execPath, [CLI, "view", "--port", "0"], { cwd: repo, env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: "", CODEX_HOME: "" } });
+    try {
+      const url = await new Promise<string>((resolve) => child.stdout.on("data", (d: Buffer) => /http:\S+/.test(String(d)) && resolve(/http:\S+/.exec(String(d))![0])));
+      const { origin, hash } = new URL(url);
+      assert.equal((await fetch(`${origin}/api/view`)).status, 403);
+      const res = await fetch(`${origin}/api/view`, { headers: { "x-token": hash.slice(3) } });
+      const view = (await res.json()) as { sessions: { key: string; files: { path: string }[] }[] };
+      assert.deepEqual(view.sessions.map((s) => [s.key, s.files.map((f) => f.path)]), [["claude:writer", ["new.md"]]]);
+      assert.match(await (await fetch(`${origin}/`)).text(), /<title>Agent Diff<\/title>/);
+    } finally {
+      child.kill();
+    }
   });
 });

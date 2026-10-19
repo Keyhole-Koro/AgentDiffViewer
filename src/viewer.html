@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Diff</title>
+<style>
+:root {
+  --bg: #fbfaf8; --panel: #ffffff; --text: #1f1d1a; --muted: #6f6a62; --line: #e6e2db;
+  --accent: #3b5bdb; --accent-soft: #edf1ff; --selected: #f1efe9;
+  --add-bg: #e9f6ec; --add-text: #1d5c2e; --del-bg: #fbecec; --del-text: #8a2424;
+  --hunk: #6f6a62; --claude: #b45a2c; --codex: #2d6a8f;
+  --recorded: #1d5c2e; --sure: #2d6a8f; --likely: #8a6a12; --maybe: #8a2424;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a1918; --panel: #222120; --text: #ebe8e3; --muted: #9c968c; --line: #35332f;
+    --accent: #8ea6ff; --accent-soft: #283152; --selected: #2c2a27;
+    --add-bg: #1d3324; --add-text: #9fdcae; --del-bg: #3a2222; --del-text: #f0a5a5;
+    --hunk: #9c968c; --claude: #e39a72; --codex: #7fb8dc;
+    --recorded: #9fdcae; --sure: #7fb8dc; --likely: #e3c56f; --maybe: #f0a5a5;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, input { font: inherit; color: inherit; }
+header { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line); padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+header .root { color: var(--muted); font-size: 13px; font-family: var(--mono); }
+.ranges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: auto; }
+.ranges button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; }
+.ranges button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.ranges input { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 3px 8px; width: 170px; font-size: 13px; }
+.layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); min-height: calc(100vh - 57px); }
+nav { border-right: 1px solid var(--line); padding: 12px 0; overflow-y: auto; max-height: calc(100vh - 57px); position: sticky; top: 57px; }
+nav .count { padding: 0 20px 8px; color: var(--muted); font-size: 13px; }
+.session { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 10px 20px; cursor: pointer; border-left: 3px solid transparent; }
+.session:hover { background: var(--selected); }
+.session[aria-current="true"] { background: var(--selected); border-left-color: var(--accent); }
+.session .top { display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: var(--muted); }
+.session .title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; }
+.agent { font-weight: 600; font-size: 12px; }
+.agent.claude { color: var(--claude); }
+.agent.codex { color: var(--codex); }
+.id { font-family: var(--mono); font-size: 12px; }
+main { padding: 24px 32px 64px; min-width: 0; }
+.head h2 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+.meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.actions { margin: 16px 0 24px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+code.cmd { font-family: var(--mono); font-size: 13px; background: var(--selected); padding: 2px 6px; border-radius: 4px; }
+.plan { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 14px; }
+.plan ul { margin: 6px 0 12px; padding-left: 18px; font-family: var(--mono); font-size: 13px; }
+.file { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin-bottom: 16px; overflow: hidden; }
+.file > summary { list-style: none; cursor: pointer; padding: 8px 14px; display: flex; gap: 10px; align-items: baseline; border-bottom: 1px solid var(--line); }
+.file:not([open]) > summary { border-bottom: 0; }
+.file > summary::-webkit-details-marker { display: none; }
+.file .path { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+.file .share { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.st { font-family: var(--mono); font-size: 12px; font-weight: 700; width: 1ch; }
+.st.A { color: var(--add-text); } .st.D { color: var(--del-text); } .st.M, .st.R { color: var(--likely); }
+.diff { overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+.hunk-head { display: flex; gap: 10px; align-items: center; padding: 4px 14px; color: var(--hunk); background: var(--selected); white-space: pre; }
+.badge { font-family: system-ui, sans-serif; font-size: 11px; border: 1px solid currentColor; border-radius: 10px; padding: 0 7px; }
+.badge.recorded { color: var(--recorded); } .badge.sure { color: var(--sure); } .badge.likely { color: var(--likely); } .badge.maybe { color: var(--maybe); }
+.l { white-space: pre; padding: 0 14px; min-width: max-content; }
+.l.add { background: var(--add-bg); color: var(--add-text); }
+.l.del { background: var(--del-bg); color: var(--del-text); }
+.more { padding: 4px 14px; color: var(--muted); font-size: 12px; }
+.empty, .error { color: var(--muted); padding: 48px 0; text-align: center; }
+.error { color: var(--del-text); }
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.legend { color: var(--muted); font-size: 12px; padding: 12px 20px; border-top: 1px solid var(--line); margin-top: 8px; display: grid; gap: 4px; }
+@media (max-width: 760px) {
+  header { padding: 10px 16px; }
+  .ranges { margin-left: 0; }
+  .layout { grid-template-columns: 1fr; }
+  nav { position: static; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  .session { padding: 8px 16px; }
+  main { padding: 16px 16px 48px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Agent Diff</h1>
+    <div class="root" id="root"></div>
+  </div>
+  <div class="ranges" id="ranges">
+    <button data-range="">Uncommitted</button>
+    <button data-range="since=1h">1 hour</button>
+    <button data-range="since=today">Today</button>
+    <button data-range="since=7d">7 days</button>
+    <input id="custom" placeholder="3h, 2026-10-19 or main" aria-label="Since a time or commit">
+    <button id="reload" title="Read the changes again">Refresh</button>
+  </div>
+</header>
+<div class="layout">
+  <nav id="nav"></nav>
+  <main id="main"><div class="empty">Reading transcripts…</div></main>
+</div>
+<script>
+const params = new URLSearchParams(location.hash.slice(1));
+const token = params.get("t") || "";
+let range = params.get("since") ? "since=" + params.get("since") : params.get("base") ? "base=" + params.get("base") : "";
+let view = null;
+let selected = null;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const pad = (n) => String(n).padStart(2, "0");
+function when(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+const agentName = (a) => (a === "codex" ? "Codex" : "Claude");
+const hunkWord = (n) => `${n} hunk${n === 1 ? "" : "s"}`;
+const CONFIDENCE = {
+  recorded: "Recorded by the hook as it happened",
+  sure: "The transcript shows this exact edit",
+  likely: "A shell command in the transcript points to it",
+  maybe: "The session touched the file; the lines did not match",
+};
+
+async function api(path, init = {}) {
+  const res = await fetch(path, { ...init, headers: { "x-token": token, "content-type": "application/json" } });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+function saveHash() {
+  const p = new URLSearchParams({ t: token });
+  if (range) {
+    const [k, v] = range.split("=");
+    p.set(k, v);
+  }
+  if (selected) p.set("s", selected);
+  history.replaceState(null, "", "#" + p.toString());
+}
+
+function rangeFromInput(text) {
+  text = text.trim();
+  if (!text) return "";
+  if (/^\d+(\.\d+)?\s*(m|min|h|d|w)$/.test(text) || text === "today" || (/\d/.test(text) && !Number.isNaN(Date.parse(text)))) return "since=" + encodeURIComponent(text);
+  return "base=" + encodeURIComponent(text);
+}
+
+function paintRanges() {
+  for (const b of document.querySelectorAll("[data-range]")) b.setAttribute("aria-pressed", String(b.dataset.range === range));
+  const preset = [...document.querySelectorAll("[data-range]")].some((b) => b.dataset.range === range);
+  if (!preset && range) $("custom").value = decodeURIComponent(range.split("=")[1]);
+  else if (preset) $("custom").value = "";
+}
+
+async function refresh() {
+  paintRanges();
+  saveHash();
+  $("main").innerHTML = '<div class="empty">Reading transcripts…</div>';
+  try {
+    view = await api("/api/view?" + range);
+  } catch (e) {
+    $("nav").innerHTML = "";
+    $("main").innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    return;
+  }
+  $("root").textContent = view.root;
+  const keys = [...view.sessions.map((s) => s.key), ...(view.unknown.length ? ["unknown"] : [])];
+  if (!keys.includes(selected)) selected = params.get("s") && keys.includes(params.get("s")) ? params.get("s") : keys[0] || null;
+  paintNav();
+  paintMain();
+}
+
+function paintNav() {
+  const n = view.sessions.length;
+  let html = `<div class="count">${n} session${n === 1 ? "" : "s"} · ${esc(view.range)}</div>`;
+  for (const s of view.sessions) {
+    html += `<button class="session" data-key="${esc(s.key)}" aria-current="${s.key === selected}">
+      <div class="top"><span class="agent ${s.agent}">${agentName(s.agent)}</span><span class="id">${esc(s.id.slice(0, 8))}</span><span>${when(s.lastAt)}</span><span>${s.files.length} file${s.files.length === 1 ? "" : "s"}</span></div>
+      <div class="title">${esc(s.title || "(untitled)")}</div></button>`;
+  }
+  if (view.unknown.length) {
+    html += `<button class="session" data-key="unknown" aria-current="${selected === "unknown"}">
+      <div class="top"><span class="agent">Unattributed</span><span>${view.unknown.length} file${view.unknown.length === 1 ? "" : "s"}</span></div>
+      <div class="title">Changes no session explains</div></button>`;
+  }
+  html += `<div class="legend">${Object.entries(CONFIDENCE).map(([k, v]) => `<div><span class="badge ${k}">${k}</span> ${esc(v)}</div>`).join("")}</div>`;
+  $("nav").innerHTML = html;
+}
+
+function paintFile(f) {
+  const share = f.hunks.length === f.total ? hunkWord(f.total) : `${f.hunks.length} of ${hunkWord(f.total)}`;
+  let html = `<details class="file" open><summary><span class="st ${esc(f.status)}">${esc(f.status)}</span><span class="path">${esc(f.path)}</span><span class="share">${share}</span></summary><div class="diff">`;
+  if (f.shell) html += `<div class="more">Shell commands in ${f.shell.map((k) => esc(k.split(":")[1].slice(0, 8))).join(", ")} mention this file.</div>`;
+  for (const h of f.hunks) {
+    const badge = h.confidence ? `<span class="badge ${h.confidence}" title="${esc(CONFIDENCE[h.confidence])}">${h.confidence}</span>` : "";
+    html += `<div class="hunk-head"><span>${esc(h.header)}</span>${badge}</div>`;
+    for (const l of h.lines) {
+      const cls = l[0] === "+" ? "add" : l[0] === "-" ? "del" : "";
+      html += `<div class="l ${cls}">${esc(l) || " "}</div>`;
+    }
+    if (h.truncated) html += `<div class="more">… ${h.truncated} more lines</div>`;
+  }
+  if (!f.hunks.length) html += `<div class="more">Binary or too large to show.</div>`;
+  return html + "</div></details>";
+}
+
+function paintMain() {
+  if (!selected) {
+    $("main").innerHTML = `<div class="empty">No changes ${range ? "in this range" : "in the working tree"}.</div>`;
+    return;
+  }
+  if (selected === "unknown") {
+    $("main").innerHTML = `<div class="head"><h2>Unattributed</h2></div>
+      <p class="hint">Edited by hand, by a tool, or by a session older than the transcripts read. With <code class="cmd">agent-diff install</code>, future shell edits are recorded too.</p>
+      ${view.unknown.map(paintFile).join("")}`;
+    return;
+  }
+  const s = view.sessions.find((x) => x.key === selected);
+  const hunks = s.files.reduce((n, f) => n + f.hunks.length, 0);
+  const stage = range ? "" : `<button class="btn primary" id="stage">Stage this session's changes</button>`;
+  $("main").innerHTML = `<div class="head"><h2>${esc(s.title || "(untitled)")}</h2>
+    <div class="meta"><span class="agent ${s.agent}">${agentName(s.agent)}</span><span class="id">${esc(s.id)}</span><span>${when(s.firstAt)} – ${when(s.lastAt)}</span><span>${s.files.length} file${s.files.length === 1 ? "" : "s"}, ${hunkWord(hunks)}</span></div></div>
+    <div class="actions">${stage}<code class="cmd">agent-diff add ${esc(s.id.slice(0, 8))}</code></div>
+    <div id="plan"></div>
+    ${s.files.map(paintFile).join("")}`;
+  if (stage) $("stage").onclick = () => planStage(s);
+}
+
+function list(items) {
+  return items.length ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
+}
+
+async function planStage(s) {
+  const box = $("plan");
+  box.innerHTML = `<div class="plan">Working out what to stage…</div>`;
+  try {
+    const plan = await api("/api/stage?" + range, { method: "POST", body: JSON.stringify({ session: s.key }) });
+    const items = [...plan.whole, ...plan.partial.map((p) => `${p.path}  (${hunkWord(p.hunks)} of its changes)`)];
+    box.innerHTML = `<div class="plan">${items.length ? "This adds to the index:" : "Nothing to stage."}${list(items)}
+      ${plan.skipped.length ? "Skipped:" + list(plan.skipped) : ""}
+      ${items.length ? `<button class="btn primary" id="confirm">Stage</button> <button class="btn" id="cancel">Cancel</button>` : ""}</div>`;
+    if (!items.length) return;
+    $("cancel").onclick = () => (box.innerHTML = "");
+    $("confirm").onclick = async () => {
+      try {
+        await api("/api/stage?" + range, { method: "POST", body: JSON.stringify({ session: s.key, apply: true }) });
+        box.innerHTML = `<div class="plan">Staged. Check with <code class="cmd">git diff --cached --stat</code>.</div>`;
+      } catch (e) {
+        box.innerHTML = `<div class="plan error">${esc(e.message)}</div>`;
+      }
+    };
+  } catch (e) {
+    box.innerHTML = `<div class="plan error">${esc(e.message)}</div>`;
+  }
+}
+
+$("nav").addEventListener("click", (e) => {
+  const b = e.target.closest(".session");
+  if (!b) return;
+  selected = b.dataset.key;
+  saveHash();
+  paintNav();
+  paintMain();
+  window.scrollTo(0, 0);
+});
+for (const b of document.querySelectorAll("[data-range]")) b.onclick = () => ((range = b.dataset.range), refresh());
+$("custom").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    range = rangeFromInput(e.target.value);
+    refresh();
+  }
+});
+$("reload").onclick = refresh;
+
+if (!token) $("main").innerHTML = '<div class="error">Open the full URL that agent-diff view printed.</div>';
+else refresh();
+</script>
+</body>
+</html>
