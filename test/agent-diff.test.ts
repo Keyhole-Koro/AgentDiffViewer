@@ -20,6 +20,11 @@ function git(...args: string[]): string {
   });
 }
 
+/** git at the current time (unlike git(), which commits in the past). */
+function gitNow(...args: string[]): void {
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+}
+
 function run(...args: string[]): string {
   return execFileSync(process.execPath, [CLI, ...args], { cwd: repo, encoding: "utf8", env: { ...process.env, HOME: home, NO_COLOR: "1", CLAUDE_CONFIG_DIR: "", CODEX_HOME: "" } });
 }
@@ -107,9 +112,9 @@ describe("attribution", () => {
   it("ignores sessions that touched the file before its last commit", () => {
     claudeSession("old", [claudeTool("Edit", { file_path: join(repo, "shared.ts"), old_string: "x", new_string: "const later = 1;" })]);
     // Commit again *after* the session (no fixed date), then change the file by hand.
-    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "touch"], { cwd: repo });
+    gitNow("commit", "-q", "--allow-empty", "-m", "touch");
     writeFileSync(join(repo, "shared.ts"), "const later = 1;\n");
-    execFileSync("git", ["commit", "-q", "-am", "commit the session's work"], { cwd: repo });
+    gitNow("commit", "-q", "-am", "commit the session's work");
     writeFileSync(join(repo, "shared.ts"), "const later = 1;\nconst byHand = 2;\n");
     assert.deepEqual(owners()["shared.ts"], [null]);
   });
@@ -183,8 +188,8 @@ describe("ranges", () => {
     const base = git("rev-parse", "HEAD").trim();
     writeFileSync(join(repo, "later.md"), "committed later\n");
     claudeSession("committer", [claudeTool("Write", { file_path: join(repo, "later.md"), content: "committed later\n" })]);
-    execFileSync("git", ["add", "."], { cwd: repo });
-    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "later"], { cwd: repo });
+    gitNow("add", ".");
+    gitNow("commit", "-q", "-m", "later");
     assert.deepEqual(owners(), {});
     const json = JSON.parse(run("--json", "--base", base)) as { files: { path: string; hunks: { owner: string }[] }[] };
     assert.deepEqual(json.files.map((f) => [f.path, f.hunks[0]!.owner]), [["later.md", "claude:committer"]]);
