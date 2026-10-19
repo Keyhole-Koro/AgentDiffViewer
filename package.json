@@ -1,11 +1,15 @@
 {
-  "name": "agent-blame",
+  "name": "agent-diff-viewer",
   "version": "0.1.0",
-  "description": "Which Claude Code or Codex session made each uncommitted change in a git working tree",
+  "description": "See which Claude Code or Codex session made each change in your git working tree, in a local diff viewer",
   "license": "MIT",
   "type": "module",
-  "bin": { "agent-blame": "src/cli.ts" },
-  "engines": { "node": ">=22.18" },
+  "bin": {
+    "agent-diff": "src/cli.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p ."
@@ -13,5 +17,16 @@
   "devDependencies": {
     "@types/node": "22.20.5",
     "typescript": "7.0.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Keyhole-Koro/AgentDiffViewer.git"
+  },
+  "homepage": "https://github.com/Keyhole-Koro/AgentDiffViewer#readme",
+  "author": "Keyhole-Koro",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ]
 }

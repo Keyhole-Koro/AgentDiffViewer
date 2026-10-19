@@ -1,11 +1,11 @@
-# agent-blame
+# AgentDiffViewer
 
 When several Claude Code and Codex sessions work in the same checkout, `git status` mixes their
-changes. `agent-blame` reads the sessions' transcripts and tells you which session made each
+changes. `agent-diff` reads the sessions' transcripts and tells you which session made each
 uncommitted change — down to the hunk — and can stage exactly one session's work.
 
 ```text
-$ agent-blame
+$ agent-diff
 Codex  01a14249  10/16 10:17–10/19 20:44  Move the API contracts into each feature
     M README.md (1 of 2 hunks; rest by others)
     D src/contracts/admin/api.ts
@@ -19,7 +19,7 @@ Claude 0be1c91d  10/13 23:02–10/19 20:48  Design agent-authored trees
 Not found in any transcript  (edited by hand, by a tool, or by a session older than --days)
     M apps/web/e2e/workspaces/workspace-chat.spec.ts
 
-$ agent-blame add 0be1c91d      # stage that session's files and hunks, nothing else
+$ agent-diff add 0be1c91d      # stage that session's files and hunks, nothing else
 $ git commit
 ```
 
@@ -28,17 +28,17 @@ $ git commit
 Node 22.18 or later (it runs the TypeScript sources directly).
 
 ```bash
-npm i -g agent-blame          # or: npx agent-blame
+npm i -g agent-diff-viewer   # provides the agent-diff command
 ```
 
 ## Commands
 
 | Command | |
 |---|---|
-| `agent-blame` | Uncommitted changes grouped by session |
-| `agent-blame --by-file` | One line per file with its sessions |
-| `agent-blame show <session>` | The hunks a session made, as a diff |
-| `agent-blame add <session>` | Stage the session's changes: whole files it alone changed, and its hunks of shared files (`--dry-run` to preview) |
+| `agent-diff` | Uncommitted changes grouped by session |
+| `agent-diff --by-file` | One line per file with its sessions |
+| `agent-diff show <session>` | The hunks a session made, as a diff |
+| `agent-diff add <session>` | Stage the session's changes: whole files it alone changed, and its hunks of shared files (`--dry-run` to preview) |
 | `--json` | Machine-readable output for any of the above |
 
 `<session>` is an id prefix, optionally `claude:` or `codex:` first. `-C <dir>` runs in another

@@ -6,12 +6,12 @@ import { readCodex } from "./codex.ts";
 import { changedFiles, gitAdd, gitApplyCached, repoRoot, unstagedDiff } from "./git.ts";
 import type { Session, Transcripts } from "./types.ts";
 
-const HELP = `agent-blame — which Claude Code or Codex session made each uncommitted change
+const HELP = `agent-diff — which Claude Code or Codex session made each uncommitted change
 
-  agent-blame                 Uncommitted changes grouped by the session that made them
-  agent-blame --by-file       The same, one line per file
-  agent-blame show <session>  The hunks a session made, as a diff
-  agent-blame add <session>   Stage exactly that session's changes (whole files and single hunks)
+  agent-diff                 Uncommitted changes grouped by the session that made them
+  agent-diff --by-file       The same, one line per file
+  agent-diff show <session>  The hunks a session made, as a diff
+  agent-diff add <session>   Stage exactly that session's changes (whole files and single hunks)
 
 Options
   -C <dir>         Run in another repository
@@ -229,15 +229,15 @@ function main(): void {
       else printBySession(transcripts, attributions);
       return;
     case "show":
-      if (!arg) throw new Error("Usage: agent-blame show <session>");
+      if (!arg) throw new Error("Usage: agent-diff show <session>");
       show(transcripts, attributions, findSession(transcripts, arg));
       return;
     case "add":
-      if (!arg) throw new Error("Usage: agent-blame add <session>");
+      if (!arg) throw new Error("Usage: agent-diff add <session>");
       add(root, transcripts, attributions, findSession(transcripts, arg), !!o["dry-run"]);
       return;
     default:
-      throw new Error(`Unknown command "${command}". Run agent-blame --help.`);
+      throw new Error(`Unknown command "${command}". Run agent-diff --help.`);
   }
 }
 

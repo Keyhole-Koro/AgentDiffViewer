@@ -8,7 +8,7 @@ export interface Session {
   cwd: string | undefined;
   firstAt: number; // ms
   lastAt: number; // ms
-  /** Where the transcript lives, for `agent-blame show`. */
+  /** Where the transcript lives, for `agent-diff show`. */
   source: string;
 }
 
