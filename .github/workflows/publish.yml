@@ -64,6 +64,8 @@ jobs:
       - name: Use npm 11 (trusted publishing needs 11.5.1 or later)
         run: npm install -g npm@11 && npm --version
       - run: npm ci
+      # Build first: npm checks the bin paths before prepack runs, and drops the ones missing.
+      - run: npm run build
       - name: Use NPM_TOKEN if set (first release only)
         if: env.NPM_TOKEN != ''
         run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
